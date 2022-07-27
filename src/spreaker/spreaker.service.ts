@@ -5,6 +5,44 @@ import { auth } from "../config/configuration";
 
 @Injectable()
 export class SpreakerService {
+  private readonly IP_ADDRESSES = [
+    "4.61.17.19",
+    "40.61.17.19",
+    "5.6.170.19",
+    "6.99.170.19",
+    "7.192.170.19",
+    "16.19.177.92",
+    "29.114.158.8",
+    "12.118.36.202",
+    "8.93.7.192",
+    "150.91.79.12",
+    "141.19.77.12",
+    "13.76.22.32",
+    "56.8.7.192",
+    "22.1.78.89",
+    "33.23.89.22",
+    "8.21.68.9",
+    "34.91.127.129",
+    "34.81.167.129",
+    "44.88.127.19",
+    "9.78.177.19",
+    "69.61.120.129",
+    "77.32.90.197",
+    "99.192.170.19",
+    "96.9.77.192",
+    "64.64.108.88",
+    "52.18.3.202",
+    "91.9.77.192",
+    "92.9.77.192",
+    "93.9.77.192",
+    "94.91.77.192",
+    "95.81.77.192",
+    "96.91.7.192",
+    "97.91.7.19",
+    "98.91.7.19",
+    "3.61.17.19",
+    "99.61.17.19"
+  ]
   private readonly LOGGER = new Logger(SpreakerService.name);
   private readonly PAGE_URL = "https://spreaker.com";
   private readonly PAGE_HEADER_SELECTOR = "div.header";
@@ -28,26 +66,37 @@ export class SpreakerService {
 
   private async run() {
     const download_path = path.resolve('./spreaker_downloads');
-    const browser = await this.getBrowser();
-    const page = await this.generateBrowserPage(browser);
-    const client = await page.target().createCDPSession()
-    await client.send('Page.setDownloadBehavior', {
-      behavior: 'allow',
-      downloadPath: download_path
-    });
-    await this.login(page);
-    await this.gotoPodcastPage(page);
-    const userShows = await this.getAllUserShows(page);
-    await this.iterateThroughUserShows(userShows, browser, page);
+    let i = 0;
+    while(i < 3000) {
+      this.LOGGER.log("i"+i);
+      let index = i % this.IP_ADDRESSES.length;
+      ++i;
+      try{
+        const browser = await this.getBrowser(this.IP_ADDRESSES[index]);
+        const page = await this.generateBrowserPage(browser);
+        const client = await page.target().createCDPSession()
+        await client.send('Page.setDownloadBehavior', {
+          behavior: 'allow',
+          downloadPath: download_path
+        });
+        await this.login(page);
+        await this.gotoPodcastPage(page);
+        const userShows = await this.getAllUserShows(page);
+        await this.iterateThroughUserShows(userShows, browser, page);
+        await browser.close();
+      } catch(e) {
+        this.LOGGER.error("Error occured on ip" + this.IP_ADDRESSES[i], e);
+      }
+
+    }
+    this.LOGGER.log("finished");
   }
 
   private async iterateThroughUserShows(userShows: puppeteer.ElementHandle[], browser: puppeteer.Browser, page: puppeteer.Page) {
-    for(let i = 0; i < 100; i++) {
-      for(let userShow of userShows) {
-        await this.gotoPodcastEpisodes(userShow, browser);
-      }
-      await this.closeTabs(browser, page);
+    for(let userShow of userShows) {
+      await this.gotoPodcastEpisodes(userShow, browser);
     }
+    await this.closeTabs(browser, page);
   }
 
   private async closeTabs(browser: puppeteer.Browser, mainPage: puppeteer.Page) {
@@ -126,13 +175,19 @@ export class SpreakerService {
     await page.waitForSelector(this.PROFILE_DROPDOWN_SELECTOR);
   }
 
-  private async getBrowser() {
+  private async getBrowser(ipAddress: string) {
+    this.LOGGER.log('--proxy-server=socks4=' + ipAddress + ':55796')
     return puppeteer.launch({ 
       headless: false,
       defaultViewport: {
         width:1500,
         height:1080
-      }
+      },
+      args: 
+      [
+        '--start-maximized',
+        '--proxy-server=socks4=' + ipAddress + ':55796'
+      ]
     });
   }
 
