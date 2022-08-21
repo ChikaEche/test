@@ -2,46 +2,15 @@ import { Injectable, Logger } from '@nestjs/common';
 import * as puppeteer from 'puppeteer';
 import * as path from 'path';
 import { auth } from "../config/configuration";
+import { SpotifyService } from 'src/spotify/spotify.service';
+import { JiosaavnService } from 'src/jiosaavn/jiosaavn.service';
+import { IHeartService } from 'src/i-heart/i-heart.service';
 
 @Injectable()
 export class SpreakerService {
   private readonly IP_ADDRESSES = [
-    "99.192.170.19",
-    "96.9.77.192",
-    "64.64.108.88",
-    "52.18.3.202",
-    "91.9.77.192",
-    "92.9.77.192",
-    "4.61.17.19",
-    "40.61.17.19",
-    "5.6.170.19",
-    "6.99.170.19",
-    "7.192.170.19",
-    "16.19.177.92",
-    "29.114.158.8",
-    "12.118.36.202",
-    "8.93.7.192",
-    "150.91.79.12",
-    "141.19.77.12",
-    "13.76.22.32",
-    "56.8.7.192",
-    "22.1.78.89",
-    "33.23.89.22",
-    "8.21.68.9",
-    "34.91.127.129",
-    "34.81.167.129",
-    "44.88.127.19",
-    "9.78.177.19",
-    "69.61.120.129",
-    "77.32.90.197",
-    "93.9.77.192",
-    "94.91.77.192",
-    "95.81.77.192",
-    "96.91.7.192",
-    "97.91.7.19",
-    "98.91.7.19",
-    "3.61.17.19",
-    "99.61.17.19"
+    "71.19.249.118:8001",
+    "46.53.191.12:3128"
   ]
   private readonly LOGGER = new Logger(SpreakerService.name);
   private readonly PAGE_URL = "https://spreaker.com";
@@ -53,25 +22,30 @@ export class SpreakerService {
   private readonly DROPDOWN_SELECTOR = "ul.header__dropdown-list";
   private readonly USER_SHOWS_SELECTOR = "div.user__shows";
   private readonly PODCAST_SHOWS_SELECTOR = this.USER_SHOWS_SELECTOR +
-   " div.user__shows-list div.user__show div a.thumb";
+    " div.user__shows-list div.user__show div a.thumb";
   private readonly PODCAST_SELECTOR = "div.podcast__episodes-item-title a";
   private readonly PLAY_SELECTOR = "div.play-button__container a";
   private readonly ONE_SECOND_TO_MILLISECONDS = 1000;
   private readonly ONE_MINUTE_TO_MILLISECONDS = 60000;
   private readonly ONE_HOUR_TO_MILLISECONDS = 3600000;
+  private readonly PODCAST_DISTRIBUTIONS = "a.podcast__distribution";
 
-  constructor() {
+  constructor(
+    private readonly spotifyService: SpotifyService,
+    private readonly jiosaavnService: JiosaavnService,
+    private readonly IheartService: IHeartService
+  ) {
     this.run();
   }
 
   private async run() {
     const download_path = path.resolve('./spreaker_downloads');
     let i = 0;
-    while(i < 3000) {
-      this.LOGGER.log("i"+i);
+    while (i < 3000) {
+      this.LOGGER.log("i" + i);
       let index = i % this.IP_ADDRESSES.length;
       ++i;
-      try{
+      try {
         const browser = await this.getBrowser(this.IP_ADDRESSES[index]);
         const page = await this.generateBrowserPage(browser);
         const client = await page.target().createCDPSession()
@@ -80,11 +54,12 @@ export class SpreakerService {
           downloadPath: download_path
         });
         await this.login(page);
-        await this.gotoPodcastPage(page);
+        await this.goToUserPage(page);
+        //await this.gotoPodcastPage(page);
         const userShows = await this.getAllUserShows(page);
         await this.iterateThroughUserShows(userShows, browser, page);
         await browser.close();
-      } catch(e) {
+      } catch (e) {
         this.LOGGER.error("Error occured on ip" + this.IP_ADDRESSES[i], e);
       }
 
@@ -92,17 +67,64 @@ export class SpreakerService {
     this.LOGGER.log("finished");
   }
 
+  private async goToUserPage(page: puppeteer.Page) {
+    await page.goto("https://www.spreaker.com/user/16512206");
+    await page.waitForSelector(this.PAGE_HEADER_SELECTOR);
+  }
+
   private async iterateThroughUserShows(userShows: puppeteer.ElementHandle[], browser: puppeteer.Browser, page: puppeteer.Page) {
-    for(let userShow of userShows) {
-      await this.gotoPodcastEpisodes(userShow, browser);
+    for (let userShow of userShows) {
+      //await this.gotoPodcastEpisodes(userShow, browser);
+      let externalPlayers = await this.getPodcastDistributions(userShow, browser);
+      await this.iterateThroughExternalPlayers(externalPlayers, browser);
     }
     await this.closeTabs(browser, page);
   }
 
+  private async iterateThroughExternalPlayers(externalPlayers: puppeteer.ElementHandle[], browser: puppeteer.Browser) {
+    for (let i = 0; i < externalPlayers.length; i++) {
+      const externalPlayerLink = await externalPlayers[i]
+        .evaluate((node) => node.getAttribute('href'));
+      await this.callExternalListener(externalPlayerLink, externalPlayers[i], browser);
+    }
+  }
+
+  private async callExternalListener(urlLink: string, elementHandle: puppeteer.ElementHandle, browser: puppeteer.Browser) {
+    
+    // if(urlLink.includes("jiosaavn")) {
+    //   this.LOGGER.log("playing from jiosaavn");
+    //   await this.jiosaavnService.play(elementHandle, browser);
+    // }
+    if(urlLink.includes('spotify')) {
+      this.LOGGER.log("playing from spotify")
+      await this.spotifyService.play(elementHandle, browser);
+    } 
+    // else if(urlLink.includes('iheart')) {
+    //   this.LOGGER.log('Playing from I heart');
+    //   await this.IheartService.play(elementHandle, browser)
+    // }
+  }
+
+  private async getPodcastDistributions(userShow: puppeteer.ElementHandle, browser: puppeteer.Browser) {
+    try {
+      await userShow.click({ button: "middle" });
+      const pages = await browser.pages();
+      const openedTabPage = pages.pop();
+      await openedTabPage.bringToFront();
+      await openedTabPage.waitForSelector(this.PAGE_HEADER_SELECTOR);
+      let externalPlayers = await openedTabPage.$$(this.PODCAST_DISTRIBUTIONS);
+      return externalPlayers;
+    } catch (e) {
+      this.LOGGER.error("Error getting external players", e);
+    }
+  }
+
+
+
   private async closeTabs(browser: puppeteer.Browser, mainPage: puppeteer.Page) {
     const pages = await browser.pages();
-    for(let page of pages) {
-      if(page != mainPage) {
+    for (let page of pages) {
+      if (page != mainPage) {
         await page.close();
       }
     }
@@ -110,26 +132,26 @@ export class SpreakerService {
 
   private async gotoPodcastEpisodes(userShow: puppeteer.ElementHandle, browser: puppeteer.Browser) {
     try {
-      await userShow.click({button: "middle"});
+      await userShow.click({ button: "middle" });
       const pages = await browser.pages();
       const openedTabPage = pages.pop();
       await openedTabPage.waitForSelector(this.PAGE_HEADER_SELECTOR);
       const podcasts = await openedTabPage.$$(this.PODCAST_SELECTOR);
-      for(const podcast of podcasts) {
+      for (const podcast of podcasts) {
         await this.playPodcast(podcast, browser);
       }
-    } catch(e) {
+    } catch (e) {
       this.LOGGER.error("Error getting podcast episodes", e);
     }
   }
 
   private async playPodcast(podcast: puppeteer.ElementHandle, browser: puppeteer.Browser) {
     try {
-      await podcast.click({button: "middle"});
+      await podcast.click({ button: "middle" });
       const pages = await browser.pages();
       const openedTabPage = pages.pop();
       await openedTabPage.waitForSelector(this.PAGE_HEADER_SELECTOR);
-      openedTabPage.bringToFront();
+      await openedTabPage.bringToFront();
       const podcastDurationElement = await openedTabPage.$("div#track_player_time_total");
       const podcastDuration = await podcastDurationElement.evaluate((node) => node.textContent);
       const podcastTime = this.convertPodcastPlayTimeToMilliseconds(podcastDuration);
@@ -137,7 +159,7 @@ export class SpreakerService {
       await openedTabPage.click(this.PLAY_SELECTOR);
       await openedTabPage.waitForTimeout(podcastTime);
       await openedTabPage.close()
-    } catch(e) {
+    } catch (e) {
       this.LOGGER.error("Error playing podcast", e);
     }
   }
@@ -146,10 +168,10 @@ export class SpreakerService {
     const time = timeInString.split(":");
     let podcastTime = 0;
     podcastTime += +time.pop() * this.ONE_SECOND_TO_MILLISECONDS;
-    if(time.length !== 0) {
+    if (time.length !== 0) {
       podcastTime += +time.pop() * this.ONE_MINUTE_TO_MILLISECONDS;
-    } 
-    if(time.length !== 0) {
+    }
+    if (time.length !== 0) {
       podcastTime += +time.pop() * this.ONE_HOUR_TO_MILLISECONDS;
     }
     return podcastTime;
@@ -159,35 +181,38 @@ export class SpreakerService {
     return page.$$(this.PODCAST_SHOWS_SELECTOR);
   }
 
-  private async gotoPodcastPage(page: puppeteer.Page) {
-    await page.click(this.PROFILE_DROPDOWN_SELECTOR);
-    await page.waitForSelector(this.DROPDOWN_SELECTOR);
-    await page.click(this.PUBLIC_PROFILE_SELECTOR);
-    await page.waitForSelector(this.USER_SHOWS_SELECTOR);
-  }
+  // private async gotoPodcastPage(page: puppeteer.Page) {
+  //   await page.click(this.PROFILE_DROPDOWN_SELECTOR);
+  //   await page.waitForSelector(this.DROPDOWN_SELECTOR);
+  //   await page.click(this.PUBLIC_PROFILE_SELECTOR);
+  //   await page.waitForSelector(this.USER_SHOWS_SELECTOR);
+  // }
 
   private async login(page: puppeteer.Page) {
     await page.click(this.LOGIN_SELECTOR);
-    await page.waitForSelector(this.LOGIN_ONLOAD_SELECTOR);
+    await page.waitForSelector("#identity", {visible: true});
+    await page.focus("#identity");
+    await page.waitForTimeout(2000)
     await page.type("#identity", auth.i);
     await page.type("#password", auth.p);
+    // await page.keyboard.down('Backspace');
+    // await page.type("#identity", auth.i);
     await page.click("#login-form-submit");
     await page.waitForSelector(this.PROFILE_DROPDOWN_SELECTOR);
   }
 
   private async getBrowser(ipAddress: string) {
     this.LOGGER.log('--proxy-server=socks4=' + ipAddress + ':55796')
-    return puppeteer.launch({ 
+    return puppeteer.launch({
       headless: false,
       defaultViewport: {
-        width:1500,
-        height:1080
+        width: 1500,
+        height: 1080
       },
-      args: 
-      [
-        '--start-maximized',
-        '--proxy-server=socks4=' + ipAddress + ':55796'
-      ]
+      args:
+        [
+          '--start-maximized'
+        ]
     });
   }
 
