@@ -68,7 +68,7 @@ export class SpreakerService {
   }
 
   private async goToUserPage(page: puppeteer.Page) {
-    await page.goto("https://www.spreaker.com/user/16512206");
+    await page.goto("https://www.spreaker.com/user/16525816");
     await page.waitForSelector(this.PAGE_HEADER_SELECTOR);
   }
 
@@ -91,11 +91,11 @@ export class SpreakerService {
 
   private async callExternalListener(urlLink: string, elementHandle: puppeteer.ElementHandle, browser: puppeteer.Browser) {
     
-    // if(urlLink.includes("jiosaavn")) {
-    //   this.LOGGER.log("playing from jiosaavn");
-    //   await this.jiosaavnService.play(elementHandle, browser);
-    // }
-    if(urlLink.includes('spotify')) {
+    if(urlLink.includes("jiosaavn")) {
+      this.LOGGER.log("playing from jiosaavn");
+      await this.jiosaavnService.play(elementHandle, browser);
+    }
+    else if(urlLink.includes('spotify')) {
       this.LOGGER.log("playing from spotify")
       await this.spotifyService.play(elementHandle, browser);
     } 
